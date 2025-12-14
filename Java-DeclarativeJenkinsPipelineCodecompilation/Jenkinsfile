@@ -72,18 +72,43 @@ pipeline {
         }
       }
       steps {
-        withCredentials([
-          string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')
-        ]) {
+        withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
           sh '''
             payload=$(cat <<EOF
-{"text":"React Build SUCCESS — Job: ${JOB_NAME}, Build: ${BUILD_NUMBER}"}
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": { "type": "plain_text", "text": "✅ BUILD SUCCESS" }
+    },
+    {
+      "type": "section",
+      "fields": [
+        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
+        { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
+        { "type": "mrkdwn", "text": "*Status:*\\nSUCCESS 🎉" }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
+      ]
+    }
+  ]
+}
 EOF
 )
-            curl -s -X POST \
-              -H "Content-type: application/json" \
-              --data "$payload" \
-              "$SLACK_WEBHOOK_URL" || true
+            curl -s -X POST -H "Content-type: application/json" \
+              --data "$payload" "$SLACK_WEBHOOK_URL" || true
           '''
         }
       }
@@ -95,18 +120,43 @@ EOF
 
     failure {
       echo "Build failed — notifying Slack"
-      withCredentials([
-        string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')
-      ]) {
+      withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
         sh '''
           payload=$(cat <<EOF
-{"text":"React Build FAILED — Job: ${JOB_NAME}, Build: ${BUILD_NUMBER}"}
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": { "type": "plain_text", "text": "❌ BUILD FAILED" }
+    },
+    {
+      "type": "section",
+      "fields": [
+        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
+        { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
+        { "type": "mrkdwn", "text": "*Status:*\\nFAILED 🚨" }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
+      ]
+    }
+  ]
+}
 EOF
 )
-          curl -s -X POST \
-            -H "Content-type: application/json" \
-            --data "$payload" \
-            "$SLACK_WEBHOOK_URL" || true
+          curl -s -X POST -H "Content-type: application/json" \
+            --data "$payload" "$SLACK_WEBHOOK_URL" || true
         '''
       }
     }
