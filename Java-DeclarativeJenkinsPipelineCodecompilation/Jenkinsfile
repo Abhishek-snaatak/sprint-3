@@ -1,68 +1,70 @@
 pipeline {
-    agent any
 
-    tools {
-        jdk 'jdk11'
-        maven 'MVN'
+  agent any
+
+  environment {
+    GIT_URL    = 'https://github.com/OT-MICROSERVICES/salary-api.git'
+    GIT_BRANCH = 'main'
+    DEBUG_LOG  = "${WORKSPACE}/compile_debug.log"
+  }
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        echo "Checking out ${GIT_URL} @ ${GIT_BRANCH}"
+        git url: "${GIT_URL}", branch: "${GIT_BRANCH}"
+      }
     }
 
-    environment {
-        MVN_OPTS = "-B"
-        REPORT_NAME = "zap_report.html"
-        TARGET_URL   = "http://localhost:8080"     // <-- keep/change as needed
+    stage('Verify Java & Maven') {
+      steps {
+        sh '''
+          set -xe
+          echo ">>> Verify Java & Maven" | tee -a "${DEBUG_LOG}"
+          java -version 2>&1 | tee -a "${DEBUG_LOG}"
+          mvn -version  2>&1 | tee -a "${DEBUG_LOG}"
+        '''
+      }
     }
 
-    stages {
-
-        stage('Checkout') {
-            steps {
-                git url: 'https://github.com/OT-MICROSERVICES/salary-api.git',
-                    branch: 'main'
-            }
-        }
-
-        stage('Clean & Compile') {
-            steps {
-                sh "mvn ${MVN_OPTS} clean compile"
-            }
-        }
-
-        stage('Unit Tests') {
-            steps {
-                sh "mvn ${MVN_OPTS} test"
-            }
-        }
-
-        stage('Package') {
-            steps {
-                sh "mvn ${MVN_OPTS} package"
-            }
-        }
-
-        stage('Code Quality') {
-            steps {
-                withSonarQubeEnv('SonarQubeServer') {
-                    sh "mvn ${MVN_OPTS} sonar:sonar"
-                }
-            }
-        }
-
-        stage('Quality Gate') {
-            steps {
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
-                }
-            }
-        }
-
-        stage('Archive Reports') {
-            steps {
-                sh "mkdir -p zap_reports"
-                sh "echo 'Dummy ZAP results' > zap_reports/${REPORT_NAME}"
-                archiveArtifacts artifacts: 'zap_reports/*', fingerprint: true
-            }
-        }
+    stage('Clean & Compile (No Tests)') {
+      steps {
+        sh '''
+          set -xe
+          echo ">>> Maven clean compile (skip tests)" | tee -a "${DEBUG_LOG}"
+          mvn clean compile -DskipTests 2>&1 | tee -a "${DEBUG_LOG}"
+        '''
+      }
     }
+
+    stage('Verify Compilation Output') {
+      steps {
+        sh '''
+          set -xe
+          echo ">>> Verifying target/classes" | tee -a "${DEBUG_LOG}"
+          if [ ! -d "target/classes" ]; then
+            echo "ERROR: target/classes not found!" | tee -a "${DEBUG_LOG}"
+            exit 20
+          fi
+          ls -la target/classes | tee -a "${DEBUG_LOG}"
+        '''
+      }
+    }
+
+    stage('Archive Artifacts') {
+      steps {
+        echo "Archiving compiled classes"
+        archiveArtifacts artifacts: 'target/classes/**', fingerprint: true
+        archiveArtifacts artifacts: 'compile_debug.log', fingerprint: true
+      }
+    }
+  }
 
     post {
 
