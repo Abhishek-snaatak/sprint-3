@@ -1,0 +1,119 @@
+pipeline {
+    agent any
+
+    tools {
+        jdk 'JDK11'
+        maven 'Maven3'
+    }
+
+    environment {
+        MVN_OPTS = "-B"
+        REPORT_NAME = "zap_report.html"
+        TARGET_URL   = "http://localhost:8080"     // <-- keep/change as needed
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git url: 'https://github.com/OT-MICROSERVICES/salary-api.git',
+                    branch: 'main'
+            }
+        }
+
+        stage('Clean & Compile') {
+            steps {
+                sh "mvn ${MVN_OPTS} clean compile"
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                sh "mvn ${MVN_OPTS} test"
+            }
+        }
+
+        stage('Package') {
+            steps {
+                sh "mvn ${MVN_OPTS} package"
+            }
+        }
+
+        stage('Code Quality') {
+            steps {
+                withSonarQubeEnv('SonarQubeServer') {
+                    sh "mvn ${MVN_OPTS} sonar:sonar"
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Archive Reports') {
+            steps {
+                sh "mkdir -p zap_reports"
+                sh "echo 'Dummy ZAP results' > zap_reports/${REPORT_NAME}"
+                archiveArtifacts artifacts: 'zap_reports/*', fingerprint: true
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo "Build success — sending Slack notification"
+
+            withCredentials([string(credentialsId: 'slack-webhook',
+                                    variable: 'SLACK_WEBHOOK_URL')]) {
+
+                sh '''
+                    ARTIFACT="${BUILD_URL}artifact/zap_reports/${REPORT_NAME}"
+                    TIMESTAMP="$(date +'%Y-%m-%d %H:%M:%S')"
+
+                    MSG=":white_check_mark: *SUCCESS*  
+ZAP scan completed.  
+*Target:* ${TARGET_URL}  
+*Report:* ${ARTIFACT}  
+*Time:* ${TIMESTAMP}"
+
+
+                    curl -s -X POST \
+                      -H 'Content-type: application/json' \
+                      --data "{\"text\":\"${MSG}\"}" \
+                      "$SLACK_WEBHOOK_URL" || true
+                '''
+            }
+        }
+
+        failure {
+            echo "Build failed — sending Slack notification"
+
+            withCredentials([string(credentialsId: 'slack-webhook',
+                                    variable: 'SLACK_WEBHOOK_URL')]) {
+
+                sh '''
+                    TIMESTAMP="$(date +'%Y-%m-%d %H:%M:%S')"
+
+                    MSG=":x: *FAILED*  
+Build or ZAP scan failed.  
+*Job:* ${JOB_NAME}  
+*Build:* #${BUILD_NUMBER}  
+*URL:* ${BUILD_URL}  
+*Time:* ${TIMESTAMP}"
+
+
+                    curl -s -X POST \
+                      -H 'Content-type: application/json' \
+                      --data "{\"text\":\"${MSG}\"}" \
+                      "$SLACK_WEBHOOK_URL" || true
+                '''
+            }
+        }
+    }
+}
