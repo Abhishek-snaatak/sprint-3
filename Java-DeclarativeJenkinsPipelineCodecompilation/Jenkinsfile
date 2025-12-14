@@ -66,56 +66,39 @@ pipeline {
     }
   }
 
-    post {
-
-        success {
-            echo "Build success — sending Slack notification"
-
-            withCredentials([string(credentialsId: 'slack-webhook',
-                                    variable: 'SLACK_WEBHOOK_URL')]) {
-
-                sh '''
-                    ARTIFACT="${BUILD_URL}artifact/zap_reports/${REPORT_NAME}"
-                    TIMESTAMP="$(date +'%Y-%m-%d %H:%M:%S')"
-
-                    MSG=":white_check_mark: *SUCCESS*  
-ZAP scan completed.  
-*Target:* ${TARGET_URL}  
-*Report:* ${ARTIFACT}  
-*Time:* ${TIMESTAMP}"
-
-
-                    curl -s -X POST \
-                      -H 'Content-type: application/json' \
-                      --data "{\"text\":\"${MSG}\"}" \
-                      "$SLACK_WEBHOOK_URL" || true
-                '''
-            }
+    stage('Slack Success Notification') {
+      when { expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' } }
+      steps {
+        withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
+          sh '''
+            payload=$(cat <<EOF
+{"text":"React Build SUCCESS — Job: ${JOB_NAME}, Build: ${BUILD_NUMBER}"}
+EOF
+)
+            curl -s -X POST -H "Content-type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL" || true
+          '''
         }
-
-        failure {
-            echo "Build failed — sending Slack notification"
-
-            withCredentials([string(credentialsId: 'slack-webhook',
-                                    variable: 'SLACK_WEBHOOK_URL')]) {
-
-                sh '''
-                    TIMESTAMP="$(date +'%Y-%m-%d %H:%M:%S')"
-
-                    MSG=":x: *FAILED*  
-Build or ZAP scan failed.  
-*Job:* ${JOB_NAME}  
-*Build:* #${BUILD_NUMBER}  
-*URL:* ${BUILD_URL}  
-*Time:* ${TIMESTAMP}"
-
-
-                    curl -s -X POST \
-                      -H 'Content-type: application/json' \
-                      --data "{\"text\":\"${MSG}\"}" \
-                      "$SLACK_WEBHOOK_URL" || true
-                '''
-            }
-        }
+      }
     }
+
+  } // stages
+
+  post {
+    failure {
+      echo "Build failed — notifying Slack"
+      withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
+        sh '''
+          payload=$(cat <<EOF
+{"text":"React Build FAILED — Job: ${JOB_NAME}, Build: ${BUILD_NUMBER}"}
+EOF
+)
+          curl -s -X POST -H "Content-type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL" || true
+        '''
+      }
+    }
+
+    always {
+      echo "Job finished: ${JOB_NAME} #${BUILD_NUMBER}"
+    }
+  }
 }
