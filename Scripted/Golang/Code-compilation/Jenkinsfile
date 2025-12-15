@@ -79,11 +79,9 @@ node {
     // =========================
     // SLACK SUCCESS
     // =========================
-    stage('Slack Success Notification') {
+    stage('Slack Notification (success)') {
       withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
         sh '''
-          TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
-
           payload=$(cat <<EOF
 {
   "blocks": [
@@ -94,8 +92,8 @@ node {
     {
       "type": "section",
       "fields": [
-        { "type": "mrkdwn", "text": "*Job:*\\n'"$JOB_NAME"'" },
-        { "type": "mrkdwn", "text": "*Build #:*\\n#'"$BUILD_NUMBER"'" },
+        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
         { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
         { "type": "mrkdwn", "text": "*Status:*\\nSUCCESS 🎉" }
       ]
@@ -104,35 +102,35 @@ node {
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*Build URL:*\\n<'"$BUILD_URL"'|Open in Jenkins>"
+        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
       }
     },
     {
       "type": "context",
       "elements": [
-        { "type": "mrkdwn", "text": "🕒 *Time (IST):* '"$TIMESTAMP"'" }
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
       ]
     }
   ]
 }
 EOF
 )
-
-          curl -s -X POST -H "Content-type: application/json" \
-            --data "$payload" "$SLACK_WEBHOOK_URL"
+          curl -s -X POST -H "Content-Type: application/json" \
+               --data "$payload" "$SLACK_WEBHOOK_URL" || true
         '''
       }
     }
 
   } catch (err) {
 
+    buildFailed = true
+    echo "Build failed: ${err}"
+
     // =========================
     // SLACK FAILURE
     // =========================
     withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
       sh '''
-        TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
-
         payload=$(cat <<EOF
 {
   "blocks": [
@@ -143,8 +141,8 @@ EOF
     {
       "type": "section",
       "fields": [
-        { "type": "mrkdwn", "text": "*Job:*\\n'"$JOB_NAME"'" },
-        { "type": "mrkdwn", "text": "*Build #:*\\n#'"$BUILD_NUMBER"'" },
+        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
         { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
         { "type": "mrkdwn", "text": "*Status:*\\nFAILED 🚨" }
       ]
@@ -153,26 +151,35 @@ EOF
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*Build URL:*\\n<'"$BUILD_URL"'|Open in Jenkins>"
+        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
       }
     },
     {
       "type": "context",
       "elements": [
-        { "type": "mrkdwn", "text": "🕒 *Time (IST):* '"$TIMESTAMP"'" }
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
       ]
     }
   ]
 }
 EOF
 )
-
-        curl -s -X POST -H "Content-type: application/json" \
-          --data "$payload" "$SLACK_WEBHOOK_URL"
+        curl -s -X POST -H "Content-Type: application/json" \
+             --data "$payload" "$SLACK_WEBHOOK_URL" || true
       '''
     }
 
     throw err
-  }
 
+  } finally {
+
+    echo "Pipeline finished. buildFailed=${buildFailed}. Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+
+    // Always try to archive debug log
+    try {
+      archiveArtifacts artifacts: 'compile_debug.log', allowEmptyArchive: true
+    } catch (e) {
+      echo "Could not archive compile_debug.log: ${e}"
+    }
+  }
 }
