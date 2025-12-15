@@ -34,7 +34,7 @@ pipeline {
       }
     }
 
-    stage('Clean & Compile') {
+stage('Clean & Compile') {
   steps {
     sh '''
       set -xe
@@ -46,10 +46,11 @@ pipeline {
 
       echo ">>> Building Go binary" | tee -a "${DEBUG_LOG}"
       CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-        go build -o ${GO_BINARY} ./cmd 2>&1 | tee -a "${DEBUG_LOG}"
+        go build -o ${GO_BINARY} . 2>&1 | tee -a "${DEBUG_LOG}"
     '''
   }
 }
+
 
 
     stage('Verify Compilation Output') {
