@@ -1,0 +1,177 @@
+pipeline {
+
+  agent any
+
+  environment {
+    GIT_URL    = 'https://github.com/OT-MICROSERVICES/employee-api.git'
+    GIT_BRANCH = 'main'
+    GO_BINARY  = 'employee-api'
+    DEBUG_LOG  = "${WORKSPACE}/compile_debug.log"
+  }
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        echo "Checking out ${GIT_URL} @ ${GIT_BRANCH}"
+        git url: "${GIT_URL}", branch: "${GIT_BRANCH}"
+      }
+    }
+
+    stage('Verify Go Environment') {
+      steps {
+        sh '''
+          set -xe
+          echo ">>> Verifying Go installation" | tee -a "${DEBUG_LOG}"
+          go version 2>&1 | tee -a "${DEBUG_LOG}"
+          go env GOPATH GOROOT 2>&1 | tee -a "${DEBUG_LOG}"
+        '''
+      }
+    }
+
+    stage('Clean & Compile') {
+      steps {
+        sh '''
+          set -xe
+          echo ">>> Cleaning previous build" | tee -a "${DEBUG_LOG}"
+          rm -f ${GO_BINARY}
+
+          echo ">>> Downloading dependencies" | tee -a "${DEBUG_LOG}"
+          go mod download 2>&1 | tee -a "${DEBUG_LOG}"
+
+          echo ">>> Building Go binary" | tee -a "${DEBUG_LOG}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -o ${GO_BINARY} ./... 2>&1 | tee -a "${DEBUG_LOG}"
+        '''
+      }
+    }
+
+    stage('Verify Compilation Output') {
+      steps {
+        sh '''
+          set -xe
+          echo ">>> Verifying Go binary exists" | tee -a "${DEBUG_LOG}"
+          if [ ! -f "${GO_BINARY}" ]; then
+            echo "ERROR: Go binary not found!" | tee -a "${DEBUG_LOG}"
+            exit 20
+          fi
+          ls -lh ${GO_BINARY} | tee -a "${DEBUG_LOG}"
+        '''
+      }
+    }
+
+    stage('Archive Artifacts') {
+      steps {
+        echo "Archiving Go binary & logs"
+        archiveArtifacts artifacts: "${GO_BINARY}", fingerprint: true
+        archiveArtifacts artifacts: "compile_debug.log", fingerprint: true
+      }
+    }
+
+    stage('Slack Success Notification') {
+      when {
+        expression {
+          currentBuild.result == null || currentBuild.result == 'SUCCESS'
+        }
+      }
+      steps {
+        withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
+          sh '''
+            payload=$(cat <<EOF
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": { "type": "plain_text", "text": "✅ BUILD SUCCESS" }
+    },
+    {
+      "type": "section",
+      "fields": [
+        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
+        { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
+        { "type": "mrkdwn", "text": "*Status:*\\nSUCCESS 🎉" }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
+      ]
+    }
+  ]
+}
+EOF
+)
+            curl -s -X POST -H "Content-type: application/json" \
+              --data "$payload" "$SLACK_WEBHOOK_URL" || true
+          '''
+        }
+      }
+    }
+
+  } // stages
+
+  post {
+
+    failure {
+      echo "Build failed — notifying Slack"
+      withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
+        sh '''
+          payload=$(cat <<EOF
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": { "type": "plain_text", "text": "❌ BUILD FAILED" }
+    },
+    {
+      "type": "section",
+      "fields": [
+        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
+        { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
+        { "type": "mrkdwn", "text": "*Status:*\\nFAILED 🚨" }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
+      ]
+    }
+  ]
+}
+EOF
+)
+          curl -s -X POST -H "Content-type: application/json" \
+            --data "$payload" "$SLACK_WEBHOOK_URL" || true
+        '''
+      }
+    }
+
+    always {
+      echo "Job finished: ${JOB_NAME} #${BUILD_NUMBER}"
+    }
+
+  }
+}
