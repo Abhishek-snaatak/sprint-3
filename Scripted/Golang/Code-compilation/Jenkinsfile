@@ -1,33 +1,20 @@
 node {
 
-  // =========================
-  // CONFIG
-  // =========================
   def GIT_URL    = 'https://github.com/OT-MICROSERVICES/employee-api.git'
   def GIT_BRANCH = 'main'
-  def DEBUG_LOG  = "${env.WORKSPACE}/compile_debug.log"
   def BINARY     = 'employee-api'
-  def BUILD_PATH = '.'
+  def DEBUG_LOG  = 'compile_debug.log'
 
-  // =========================
-  // INIT
-  // =========================
   sh "mkdir -p ${env.WORKSPACE}"
   sh "touch ${DEBUG_LOG}"
 
   try {
 
-    // =========================
-    // CHECKOUT
-    // =========================
     stage('Checkout') {
       echo "Checking out ${GIT_URL} @ ${GIT_BRANCH}"
       git url: GIT_URL, branch: GIT_BRANCH
     }
 
-    // =========================
-    // VERIFY GO
-    // =========================
     stage('Verify Go Environment') {
       sh '''
         set -xe
@@ -37,51 +24,40 @@ node {
       '''
     }
 
-    // =========================
-    // CLEAN & COMPILE
-    // =========================
     stage('Clean & Compile') {
-      sh """
+      sh '''
         set -xe
-        rm -f ${BINARY}
+        rm -f employee-api
 
-        echo ">>> Downloading dependencies" | tee -a ${DEBUG_LOG}
-        go mod download | tee -a ${DEBUG_LOG}
+        echo ">>> Downloading dependencies" | tee -a compile_debug.log
+        go mod download | tee -a compile_debug.log
 
-        echo ">>> Building Go binary" | tee -a ${DEBUG_LOG}
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-          go build -o ${BINARY} . | tee -a ${DEBUG_LOG}
-      """
+        echo ">>> Building Go binary" | tee -a compile_debug.log
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o employee-api .
+      '''
     }
 
-    // =========================
-    // VERIFY OUTPUT
-    // =========================
     stage('Verify Compilation Output') {
-      sh """
+      sh '''
         set -xe
-        if [ ! -f ${BINARY} ]; then
-          echo "ERROR: Go binary not found!" | tee -a ${DEBUG_LOG}
+        if [ ! -f employee-api ]; then
+          echo "ERROR: Go binary not found!" | tee -a compile_debug.log
           exit 20
         fi
-        ls -lh ${BINARY}
-      """
+        ls -lh employee-api
+      '''
     }
 
-    // =========================
-    // ARCHIVE
-    // =========================
     stage('Archive Artifacts') {
-      archiveArtifacts artifacts: "${BINARY}", fingerprint: true
-      archiveArtifacts artifacts: "compile_debug.log", fingerprint: true
+      archiveArtifacts artifacts: 'employee-api', fingerprint: true
+      archiveArtifacts artifacts: 'compile_debug.log', fingerprint: true
     }
 
-    // =========================
-    // SLACK SUCCESS
-    // =========================
     stage('Slack Notification (success)') {
       withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
         sh '''
+          TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+
           payload=$(cat <<EOF
 {
   "blocks": [
@@ -92,8 +68,8 @@ node {
     {
       "type": "section",
       "fields": [
-        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
-        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
+        { "type": "mrkdwn", "text": "*Job:*\\n'"$JOB_NAME"'" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#'"$BUILD_NUMBER"'" },
         { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
         { "type": "mrkdwn", "text": "*Status:*\\nSUCCESS 🎉" }
       ]
@@ -102,36 +78,34 @@ node {
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
+        "text": "*Build URL:*\\n<'"$BUILD_URL"'|Open in Jenkins>"
       }
     },
     {
       "type": "context",
       "elements": [
-        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* '"$TIMESTAMP"'" }
       ]
     }
   ]
 }
 EOF
 )
+
           curl -s -X POST -H "Content-Type: application/json" \
-               --data "$payload" "$SLACK_WEBHOOK_URL" || true
+            --data "$payload" "$SLACK_WEBHOOK_URL"
         '''
       }
     }
 
   } catch (err) {
 
-    buildFailed = true
-    echo "Build failed: ${err}"
+    stage('Slack Notification (failure)') {
+      withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
+        sh '''
+          TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
 
-    // =========================
-    // SLACK FAILURE
-    // =========================
-    withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
-      sh '''
-        payload=$(cat <<EOF
+          payload=$(cat <<EOF
 {
   "blocks": [
     {
@@ -141,8 +115,8 @@ EOF
     {
       "type": "section",
       "fields": [
-        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
-        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
+        { "type": "mrkdwn", "text": "*Job:*\\n'"$JOB_NAME"'" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#'"$BUILD_NUMBER"'" },
         { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
         { "type": "mrkdwn", "text": "*Status:*\\nFAILED 🚨" }
       ]
@@ -151,35 +125,26 @@ EOF
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
+        "text": "*Build URL:*\\n<'"$BUILD_URL"'|Open in Jenkins>"
       }
     },
     {
       "type": "context",
       "elements": [
-        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* '"$TIMESTAMP"'" }
       ]
     }
   ]
 }
 EOF
 )
-        curl -s -X POST -H "Content-Type: application/json" \
-             --data "$payload" "$SLACK_WEBHOOK_URL" || true
-      '''
+
+          curl -s -X POST -H "Content-Type: application/json" \
+            --data "$payload" "$SLACK_WEBHOOK_URL"
+        '''
+      }
     }
 
     throw err
-
-  } finally {
-
-    echo "Pipeline finished. buildFailed=${buildFailed}. Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
-
-    // Always try to archive debug log
-    try {
-      archiveArtifacts artifacts: 'compile_debug.log', allowEmptyArchive: true
-    } catch (e) {
-      echo "Could not archive compile_debug.log: ${e}"
-    }
   }
 }
