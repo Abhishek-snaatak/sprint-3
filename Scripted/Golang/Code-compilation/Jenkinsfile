@@ -53,98 +53,53 @@ node {
       archiveArtifacts artifacts: 'compile_debug.log', fingerprint: true
     }
 
-    stage('Slack Notification (success)') {
-      withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
-        sh '''
-          TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+stage('Slack Notification (success)') {
+  withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
+    sh '''
+      set -e
 
-          payload=$(cat <<EOF
+      if [ -z "$SLACK_WEBHOOK_URL" ]; then
+        echo "ERROR: SLACK_WEBHOOK_URL is empty"
+        exit 1
+      fi
+
+      TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+
+      cat > payload.json <<EOF
 {
+  "text": "✅ *BUILD SUCCESS*",
   "blocks": [
     {
-      "type": "header",
-      "text": { "type": "plain_text", "text": "✅ BUILD SUCCESS" }
-    },
-    {
       "type": "section",
-      "fields": [
-        { "type": "mrkdwn", "text": "*Job:*\\n'"$JOB_NAME"'" },
-        { "type": "mrkdwn", "text": "*Build #:*\\n#'"$BUILD_NUMBER"'" },
-        { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
-        { "type": "mrkdwn", "text": "*Status:*\\nSUCCESS 🎉" }
-      ]
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Job:* $JOB_NAME\\n*Build #:* #$BUILD_NUMBER\\n*Status:* SUCCESS 🎉\\n*Time:* $TIMESTAMP"
+      }
     },
     {
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*Build URL:*\\n<'"$BUILD_URL"'|Open in Jenkins>"
+        "text": "*Build URL:* <$BUILD_URL|Open in Jenkins>"
       }
-    },
-    {
-      "type": "context",
-      "elements": [
-        { "type": "mrkdwn", "text": "🕒 *Time (IST):* '"$TIMESTAMP"'" }
-      ]
     }
   ]
 }
 EOF
-)
 
-          curl -s -X POST -H "Content-Type: application/json" \
-            --data "$payload" "$SLACK_WEBHOOK_URL"
-        '''
-      }
-    }
+      echo "Sending payload:"
+      cat payload.json
 
-  } catch (err) {
+      RESPONSE=$(curl -s -w "\\nHTTP_CODE:%{http_code}" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        --data-binary @payload.json \
+        "$SLACK_WEBHOOK_URL")
 
-    stage('Slack Notification (failure)') {
-      withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
-        sh '''
-          TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
+      echo "Slack response:"
+      echo "$RESPONSE"
 
-          payload=$(cat <<EOF
-{
-  "blocks": [
-    {
-      "type": "header",
-      "text": { "type": "plain_text", "text": "❌ BUILD FAILED" }
-    },
-    {
-      "type": "section",
-      "fields": [
-        { "type": "mrkdwn", "text": "*Job:*\\n'"$JOB_NAME"'" },
-        { "type": "mrkdwn", "text": "*Build #:*\\n#'"$BUILD_NUMBER"'" },
-        { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
-        { "type": "mrkdwn", "text": "*Status:*\\nFAILED 🚨" }
-      ]
-    },
-    {
-      "type": "section",
-      "text": {
-        "type": "mrkdwn",
-        "text": "*Build URL:*\\n<'"$BUILD_URL"'|Open in Jenkins>"
-      }
-    },
-    {
-      "type": "context",
-      "elements": [
-        { "type": "mrkdwn", "text": "🕒 *Time (IST):* '"$TIMESTAMP"'" }
-      ]
-    }
-  ]
-}
-EOF
-)
-
-          curl -s -X POST -H "Content-Type: application/json" \
-            --data "$payload" "$SLACK_WEBHOOK_URL"
-        '''
-      }
-    }
-
-    throw err
+      echo "$RESPONSE" | grep -q "HTTP_CODE:200"
+    '''
   }
 }
