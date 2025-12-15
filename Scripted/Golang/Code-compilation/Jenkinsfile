@@ -1,105 +1,130 @@
 node {
 
-  def GIT_URL    = 'https://github.com/OT-MICROSERVICES/employee-api.git'
-  def GIT_BRANCH = 'main'
-  def BINARY     = 'employee-api'
-  def DEBUG_LOG  = 'compile_debug.log'
+    env.GIT_URL = 'https://github.com/OT-MICROSERVICES/employee-api.git'
+    env.GIT_BRANCH = 'main'
+    env.BINARY_NAME = 'employee-api'
+    env.LOG_FILE = 'compile_debug.log'
 
-  sh "mkdir -p ${env.WORKSPACE}"
-  sh "touch ${DEBUG_LOG}"
+    try {
 
-  try {
+        stage('Prepare Workspace') {
+            sh '''
+              mkdir -p "$WORKSPACE"
+              : > "$LOG_FILE"
+            '''
+        }
 
-    stage('Checkout') {
-      echo "Checking out ${GIT_URL} @ ${GIT_BRANCH}"
-      git url: GIT_URL, branch: GIT_BRANCH
+        stage('Checkout') {
+            echo "Checking out ${env.GIT_URL} @ ${env.GIT_BRANCH}"
+            git branch: env.GIT_BRANCH, url: env.GIT_URL
+        }
+
+        stage('Verify Go Environment') {
+            sh '''
+              set -xe
+              echo ">>> Verifying Go installation" | tee -a $LOG_FILE
+              go version | tee -a $LOG_FILE
+              go env GOPATH GOROOT | tee -a $LOG_FILE
+            '''
+        }
+
+        stage('Clean & Compile') {
+            sh '''
+              set -xe
+              rm -f $BINARY_NAME
+
+              echo ">>> Downloading dependencies" | tee -a $LOG_FILE
+              go mod download | tee -a $LOG_FILE
+
+              echo ">>> Building Go binary" | tee -a $LOG_FILE
+              CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+              go build -o $BINARY_NAME . | tee -a $LOG_FILE
+            '''
+        }
+
+        stage('Verify Compilation Output') {
+            sh '''
+              set -xe
+              test -f $BINARY_NAME
+              ls -lh $BINARY_NAME
+            '''
+        }
+
+        stage('Archive Artifacts') {
+            archiveArtifacts artifacts: env.BINARY_NAME, fingerprint: true
+        }
+
+        stage('Slack Notification (SUCCESS)') {
+            sendSlack('SUCCESS', '✅ BUILD SUCCESS', 'SUCCESS 🎉')
+        }
+
+    } catch (err) {
+
+        stage('Slack Notification (FAILED)') {
+            sendSlack('FAILED', '❌ BUILD FAILED', 'FAILED 🚨')
+        }
+
+        throw err
     }
+}
 
-    stage('Verify Go Environment') {
-      sh '''
-        set -xe
-        echo ">>> Verifying Go installation" | tee -a compile_debug.log
-        go version | tee -a compile_debug.log
-        go env GOPATH GOROOT | tee -a compile_debug.log
-      '''
-    }
+/* ---------------- SLACK FUNCTION ---------------- */
 
-    stage('Clean & Compile') {
-      sh '''
-        set -xe
-        rm -f employee-api
+def sendSlack(String status, String headerText, String statusText) {
 
-        echo ">>> Downloading dependencies" | tee -a compile_debug.log
-        go mod download | tee -a compile_debug.log
+    withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
 
-        echo ">>> Building Go binary" | tee -a compile_debug.log
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o employee-api .
-      '''
-    }
+        sh """
+          set -e
 
-    stage('Verify Compilation Output') {
-      sh '''
-        set -xe
-        if [ ! -f employee-api ]; then
-          echo "ERROR: Go binary not found!" | tee -a compile_debug.log
-          exit 20
-        fi
-        ls -lh employee-api
-      '''
-    }
+          TIMESTAMP=\$(date "+%Y-%m-%d %H:%M:%S")
 
-    stage('Archive Artifacts') {
-      archiveArtifacts artifacts: 'employee-api', fingerprint: true
-      archiveArtifacts artifacts: 'compile_debug.log', fingerprint: true
-    }
-
-stage('Slack Notification (success)') {
-  withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
-    sh '''
-      set -e
-
-      if [ -z "$SLACK_WEBHOOK_URL" ]; then
-        echo "ERROR: SLACK_WEBHOOK_URL is empty"
-        exit 1
-      fi
-
-      TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
-
-      cat > payload.json <<EOF
+          cat > payload.json <<EOF
 {
-  "text": "✅ *BUILD SUCCESS*",
   "blocks": [
     {
+      "type": "header",
+      "text": { "type": "plain_text", "text": "${headerText}" }
+    },
+    {
       "type": "section",
-      "text": {
-        "type": "mrkdwn",
-        "text": "*Job:* $JOB_NAME\\n*Build #:* #$BUILD_NUMBER\\n*Status:* SUCCESS 🎉\\n*Time:* $TIMESTAMP"
-      }
+      "fields": [
+        { "type": "mrkdwn", "text": "*Job:*\\n${env.JOB_NAME}" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#${env.BUILD_NUMBER}" },
+        { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
+        { "type": "mrkdwn", "text": "*Status:*\\n${statusText}" }
+      ]
     },
     {
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*Build URL:* <$BUILD_URL|Open in Jenkins>"
+        "text": "*Build URL:*\\n<${env.BUILD_URL}|Open in Jenkins>"
       }
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* ${TIMESTAMP}" }
+      ]
     }
   ]
 }
 EOF
 
-      echo "Sending payload:"
-      cat payload.json
+          echo "Sending Slack payload:"
+          cat payload.json
 
-      RESPONSE=$(curl -s -w "\\nHTTP_CODE:%{http_code}" \
-        -X POST \
-        -H "Content-Type: application/json" \
-        --data-binary @payload.json \
-        "$SLACK_WEBHOOK_URL")
+          RESPONSE=\$(curl -s -w "\\nHTTP_CODE:%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data-binary @payload.json \
+            "\$SLACK_WEBHOOK_URL")
 
-      echo "Slack response:"
-      echo "$RESPONSE"
+          echo "Slack response:"
+          echo "\$RESPONSE"
 
-      echo "$RESPONSE" | grep -q "HTTP_CODE:200"
-    '''
-  }
+          echo "\$RESPONSE" | grep -q "HTTP_CODE:200"
+        """
+    }
 }
