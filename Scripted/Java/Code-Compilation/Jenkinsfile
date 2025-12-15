@@ -1,0 +1,181 @@
+node {
+
+  // =========================
+  // ENV VARIABLES
+  // =========================
+  env.GIT_URL      = 'https://github.com/OT-MICROSERVICES/salary-api.git'
+  env.GIT_BRANCH   = 'main'
+  env.JAVA_VERSION = '11'
+  env.MAVEN_CMD    = 'mvn'
+  env.DEBUG_LOG    = "${env.WORKSPACE}/compile_debug.log"
+
+  // Ensure debug log exists
+  sh "mkdir -p ${env.WORKSPACE}"
+  sh "touch ${env.DEBUG_LOG}"
+
+  def buildFailed = false
+
+  try {
+
+    // =========================
+    // CHECKOUT
+    // =========================
+    stage('Checkout') {
+      echo "Checking out ${env.GIT_URL} @ ${env.GIT_BRANCH}"
+      git url: env.GIT_URL, branch: env.GIT_BRANCH
+    }
+
+    // =========================
+    // VERIFY JAVA & MAVEN
+    // =========================
+    stage('Verify Java & Maven') {
+      sh '''
+        set -xe
+        echo ">>> Verifying Java & Maven" | tee -a "${DEBUG_LOG}"
+        java -version 2>&1 | tee -a "${DEBUG_LOG}"
+        mvn -version  2>&1 | tee -a "${DEBUG_LOG}"
+      '''
+    }
+
+    // =========================
+    // CLEAN & COMPILE (NO TESTS)
+    // =========================
+    stage('Clean & Compile') {
+      sh '''
+        set -xe
+        echo ">>> Running Maven clean compile (NO TESTS)" | tee -a "${DEBUG_LOG}"
+        mvn clean compile -DskipTests 2>&1 | tee -a "${DEBUG_LOG}"
+      '''
+    }
+
+    // =========================
+    // VERIFY COMPILED OUTPUT
+    // =========================
+    stage('Verify Compilation Output') {
+      sh '''
+        set -xe
+        echo ">>> Verifying target/classes exists" | tee -a "${DEBUG_LOG}"
+        if [ ! -d "target/classes" ]; then
+          echo "ERROR: target/classes not found!" | tee -a "${DEBUG_LOG}"
+          exit 20
+        fi
+        ls -la target/classes | tee -a "${DEBUG_LOG}"
+      '''
+    }
+
+    // =========================
+    // ARCHIVE ARTIFACTS
+    // =========================
+    stage('Archive Compilation Output') {
+      echo "Archiving compiled classes"
+      archiveArtifacts artifacts: 'target/classes/**', fingerprint: true
+      archiveArtifacts artifacts: 'compile_debug.log', fingerprint: true
+    }
+
+    // =========================
+    // SLACK SUCCESS
+    // =========================
+    stage('Slack Notification (success)') {
+      withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
+        sh '''
+          payload=$(cat <<EOF
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": { "type": "plain_text", "text": "✅ BUILD SUCCESS" }
+    },
+    {
+      "type": "section",
+      "fields": [
+        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
+        { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
+        { "type": "mrkdwn", "text": "*Status:*\\nSUCCESS 🎉" }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
+      ]
+    }
+  ]
+}
+EOF
+)
+          curl -s -X POST -H "Content-Type: application/json" \
+               --data "$payload" "$SLACK_WEBHOOK_URL" || true
+        '''
+      }
+    }
+
+  } catch (err) {
+
+    buildFailed = true
+    echo "Build failed: ${err}"
+
+    // =========================
+    // SLACK FAILURE
+    // =========================
+    withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
+      sh '''
+        payload=$(cat <<EOF
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": { "type": "plain_text", "text": "❌ BUILD FAILED" }
+    },
+    {
+      "type": "section",
+      "fields": [
+        { "type": "mrkdwn", "text": "*Job:*\\n${JOB_NAME}" },
+        { "type": "mrkdwn", "text": "*Build #:*\\n#${BUILD_NUMBER}" },
+        { "type": "mrkdwn", "text": "*Triggered By:*\\nJenkins" },
+        { "type": "mrkdwn", "text": "*Status:*\\nFAILED 🚨" }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Build URL:*\\n<${BUILD_URL}|Open in Jenkins>"
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* $(date '+%Y-%m-%d %H:%M:%S')" }
+      ]
+    }
+  ]
+}
+EOF
+)
+        curl -s -X POST -H "Content-Type: application/json" \
+             --data "$payload" "$SLACK_WEBHOOK_URL" || true
+      '''
+    }
+
+    throw err
+
+  } finally {
+
+    echo "Pipeline finished. buildFailed=${buildFailed}. Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+
+    // Always try to archive debug log
+    try {
+      archiveArtifacts artifacts: 'compile_debug.log', allowEmptyArchive: true
+    } catch (e) {
+      echo "Could not archive compile_debug.log: ${e}"
+    }
+  }
+}
