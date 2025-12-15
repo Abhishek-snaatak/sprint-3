@@ -68,18 +68,15 @@ node {
     }
 }
 
-/* ---------------- SLACK FUNCTION ---------------- */
-
 def sendSlack(String status, String headerText, String statusText) {
+
+    // Generate timestamp in Groovy (SAFE)
+    def timestamp = new Date().format("yyyy-MM-dd HH:mm:ss", TimeZone.getTimeZone("Asia/Kolkata"))
 
     withCredentials([string(credentialsId: 'slack-webhook', variable: 'SLACK_WEBHOOK_URL')]) {
 
         sh """
-          set -e
-
-          TIMESTAMP=\$(date "+%Y-%m-%d %H:%M:%S")
-
-          cat > payload.json <<EOF
+cat > payload.json <<'EOF'
 {
   "blocks": [
     {
@@ -105,26 +102,20 @@ def sendSlack(String status, String headerText, String statusText) {
     {
       "type": "context",
       "elements": [
-        { "type": "mrkdwn", "text": "🕒 *Time (IST):* ${TIMESTAMP}" }
+        { "type": "mrkdwn", "text": "🕒 *Time (IST):* ${timestamp}" }
       ]
     }
   ]
 }
 EOF
 
-          echo "Sending Slack payload:"
-          cat payload.json
+echo "Slack payload:"
+cat payload.json
 
-          RESPONSE=\$(curl -s -w "\\nHTTP_CODE:%{http_code}" \
-            -X POST \
-            -H "Content-Type: application/json" \
-            --data-binary @payload.json \
-            "\$SLACK_WEBHOOK_URL")
-
-          echo "Slack response:"
-          echo "\$RESPONSE"
-
-          echo "\$RESPONSE" | grep -q "HTTP_CODE:200"
+curl -s -X POST \
+  -H "Content-Type: application/json" \
+  --data-binary @payload.json \
+  "$SLACK_WEBHOOK_URL"
         """
     }
 }
